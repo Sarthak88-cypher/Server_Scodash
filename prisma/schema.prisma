@@ -1,0 +1,373 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// PROFILES
+// ═══════════════════════════════════════════════════════════════════════
+
+model Profile {
+  id              String        @id @default(uuid())
+  linkedinUrl     String?       @unique @map("linkedin_url")
+  resumeHash      String?       @unique @map("resume_hash")
+  status          ProfileStatus @default(ESTIMATED)
+  source          ProfileSource @default(SCRAPED)
+  confidence      Float         @default(1.0)
+
+  fullName        String?       @map("full_name")
+  headline        String?
+  locationCity    String?       @map("location_city")
+  locationCountry String?       @default("India") @map("location_country")
+  profileImageUrl String?       @map("profile_image_url")
+
+  // Computed scores
+  finalScore      Int           @default(0) @map("final_score")
+  segmentId       String?       @map("segment_id")
+  segment         Segment?      @relation(fields: [segmentId], references: [id])
+  rankInSegment   Int?          @map("rank_in_segment")
+  percentile      Float?
+
+  // Timestamps
+  lastScoredAt    DateTime?     @map("last_scored_at")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  workExperiences WorkExperience[]
+  education       Education[]
+  skills          ProfileSkill[]
+  certifications  Certification[]
+  scoreSignals    ScoreSignal[]
+  scoreHistory    ScoreHistory[]
+  ctcEstimates    CtcEstimate[]
+  resumes         Resume[]
+
+  @@index([status])
+  @@index([segmentId, finalScore(sort: Desc)])
+  @@index([locationCity, locationCountry])
+  @@index([finalScore(sort: Desc)])
+  @@map("profiles")
+}
+
+enum ProfileStatus {
+  ESTIMATED
+  VERIFIED
+}
+
+enum ProfileSource {
+  SCRAPED
+  RESUME
+  MANUAL
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// WORK EXPERIENCE
+// ═══════════════════════════════════════════════════════════════════════
+
+model WorkExperience {
+  id              String        @id @default(uuid())
+  profileId       String        @map("profile_id")
+  profile         Profile       @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  companyId       String?       @map("company_id")
+  company         Company?      @relation(fields: [companyId], references: [id])
+  companyName     String        @map("company_name")
+  title           String
+  normalizedTitle String?       @map("normalized_title")
+  roleLevel       Int?          @map("role_level") // 1 (intern) to 10 (C-suite)
+  startDate       DateTime?     @map("start_date")
+  endDate         DateTime?     @map("end_date")
+  isCurrent       Boolean       @default(false) @map("is_current")
+  location        String?
+  description     String?
+  source          ProfileSource @default(SCRAPED)
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@index([profileId])
+  @@index([companyId])
+  @@map("work_experiences")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// EDUCATION
+// ═══════════════════════════════════════════════════════════════════════
+
+model Education {
+  id              String        @id @default(uuid())
+  profileId       String        @map("profile_id")
+  profile         Profile       @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  institutionId   String?       @map("institution_id")
+  institution     Institution?  @relation(fields: [institutionId], references: [id])
+  institutionName String        @map("institution_name")
+  degree          String?
+  fieldOfStudy    String?       @map("field_of_study")
+  startYear       Int?          @map("start_year")
+  endYear         Int?          @map("end_year")
+  source          ProfileSource @default(SCRAPED)
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@index([profileId])
+  @@map("education")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SKILLS & CERTIFICATIONS
+// ═══════════════════════════════════════════════════════════════════════
+
+model ProfileSkill {
+  id               String        @id @default(uuid())
+  profileId        String        @map("profile_id")
+  profile          Profile       @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  skillId          String        @map("skill_id")
+  skill            Skill         @relation(fields: [skillId], references: [id])
+  endorsementCount Int           @default(0) @map("endorsement_count")
+  source           ProfileSource @default(SCRAPED)
+  createdAt        DateTime      @default(now()) @map("created_at")
+
+  @@unique([profileId, skillId])
+  @@index([profileId])
+  @@index([skillId])
+  @@map("profile_skills")
+}
+
+model Certification {
+  id            String        @id @default(uuid())
+  profileId     String        @map("profile_id")
+  profile       Profile       @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  name          String
+  issuingOrg    String?       @map("issuing_org")
+  issueDate     DateTime?     @map("issue_date")
+  credentialUrl String?       @map("credential_url")
+  source        ProfileSource @default(SCRAPED)
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  @@index([profileId])
+  @@map("certifications")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// REFERENCE TABLES (Companies, Institutions, Skills)
+// ═══════════════════════════════════════════════════════════════════════
+
+model Company {
+  id              String      @id @default(uuid())
+  name            String
+  normalizedName  String      @unique @map("normalized_name")
+  aliases         String[]
+  tier            CompanyTier @default(D)
+  tierScore       Float       @default(0.85) @map("tier_score")
+  industry        String?
+  sizeBand        String?     @map("size_band")
+  headquarters    String?
+  glassdoorRating Float?      @map("glassdoor_rating")
+  embedding       Unsupported("vector(1536)")?
+  lastUpdated     DateTime    @default(now()) @map("last_updated")
+  createdAt       DateTime    @default(now()) @map("created_at")
+
+  workExperiences  WorkExperience[]
+  salaryBenchmarks SalaryBenchmark[]
+
+  @@index([tier])
+  @@map("companies")
+}
+
+enum CompanyTier {
+  S // Elite: Google, Apple, Meta, Netflix, OpenAI
+  A // Top: Amazon, Microsoft, Uber, Stripe, Flipkart
+  B // Strong: Swiggy, Razorpay, PhonePe, Atlassian
+  C // Good: TCS, Infosys, Wipro, mid-tier product cos
+  D // Entry: Small service companies, unknown startups
+}
+
+model Institution {
+  id             String          @id @default(uuid())
+  name           String
+  normalizedName String          @unique @map("normalized_name")
+  aliases        String[]
+  tier           InstitutionTier @default(C)
+  tierScore      Float           @default(0.70) @map("tier_score")
+  country        String          @default("India")
+  nirfRank       Int?            @map("nirf_rank")
+  qsRank         Int?            @map("qs_rank")
+  type           String? // IIT, NIT, IIIT, Private, State, Foreign
+  embedding      Unsupported("vector(1536)")?
+  lastUpdated    DateTime        @default(now()) @map("last_updated")
+  createdAt      DateTime        @default(now()) @map("created_at")
+
+  education Education[]
+
+  @@map("institutions")
+}
+
+enum InstitutionTier {
+  S // IITs (top 5), IISc, MIT, Stanford, CMU
+  A // IITs (rest), NITs (top 5), BITS
+  B // NITs (rest), IIITs, strong private univs
+  C // Other accredited institutions
+}
+
+model Skill {
+  id               String   @id @default(uuid())
+  name             String
+  normalizedName   String   @unique @map("normalized_name")
+  aliases          String[]
+  category         String? // "language", "framework", "tool", "concept", "soft-skill"
+  demandScore      Float    @default(5.00) @map("demand_score") // 0-10
+  demandTrend      Float    @default(0.00) @map("demand_trend") // -1 to +1
+  avgSalaryPremium Float    @default(0.00) @map("avg_salary_premium") // percentage
+  jobPostCount90d  Int      @default(0) @map("job_post_count_90d")
+  embedding        Unsupported("vector(1536)")?
+  lastUpdated      DateTime @default(now()) @map("last_updated")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  profileSkills ProfileSkill[]
+
+  @@index([demandScore(sort: Desc)])
+  @@map("skills")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SEGMENTS & SALARY BENCHMARKS
+// ═══════════════════════════════════════════════════════════════════════
+
+model Segment {
+  id           String    @id @default(uuid())
+  roleCategory String    @map("role_category")
+  yoeBand      String    @map("yoe_band") // "0-2", "3-5", "6-8", "9-12", "13+"
+  geography    String // "India", "Bangalore", "Remote", etc.
+  profileCount Int       @default(0) @map("profile_count")
+  avgScore     Int       @default(0) @map("avg_score")
+  medianScore  Int       @default(0) @map("median_score")
+  p90Score     Int       @default(0) @map("p90_score")
+  lastRankedAt DateTime? @map("last_ranked_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  profiles     Profile[]
+  scoreHistory ScoreHistory[]
+
+  @@unique([roleCategory, yoeBand, geography])
+  @@map("segments")
+}
+
+model SalaryBenchmark {
+  id           String   @id @default(uuid())
+  companyId    String?  @map("company_id")
+  company      Company? @relation(fields: [companyId], references: [id])
+  roleCategory String   @map("role_category")
+  yoeBand      String   @map("yoe_band")
+  location     String
+  source       String // "kaggle_ambitionbox", "kaggle_glassdoor", "kaggle_linkedin_jobs", "levelsfyi"
+  minCtc       Float?   @map("min_ctc") // in LPA (lakhs per annum)
+  maxCtc       Float?   @map("max_ctc")
+  medianCtc    Float?   @map("median_ctc")
+  sampleSize   Int?     @map("sample_size")
+  fetchedAt    DateTime @map("fetched_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([roleCategory, yoeBand, location])
+  @@index([companyId, roleCategory])
+  @@map("salary_benchmarks")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SCORING & HISTORY
+// ═══════════════════════════════════════════════════════════════════════
+
+model ScoreSignal {
+  id              String   @id @default(uuid())
+  profileId       String   @map("profile_id")
+  profile         Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  signalType      String   @map("signal_type") // company_tier, role_progression, etc.
+  rawValue        Float    @map("raw_value")
+  normalizedValue Float    @map("normalized_value") // 0-100
+  weight          Float
+  weightedValue   Float    @map("weighted_value")
+  detailsJson     Json?    @map("details_json")
+  calculatedAt    DateTime @default(now()) @map("calculated_at")
+
+  @@unique([profileId, signalType])
+  @@index([profileId])
+  @@map("score_signals")
+}
+
+model ScoreHistory {
+  id           String   @id @default(uuid())
+  profileId    String   @map("profile_id")
+  profile      Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  score        Int
+  rankInSegment Int?    @map("rank_in_segment")
+  segmentId    String?  @map("segment_id")
+  segment      Segment? @relation(fields: [segmentId], references: [id])
+  trigger      String // "linkedin_score", "resume_score", "recalculation"
+  delta        Int      @default(0)
+  snapshotJson Json?    @map("snapshot_json")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([profileId, createdAt(sort: Desc)])
+  @@map("score_history")
+}
+
+model CtcEstimate {
+  id           String   @id @default(uuid())
+  profileId    String   @map("profile_id")
+  profile      Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  source       String // "salary_benchmark", "ai_triangulation", "user_reported"
+  minCtc       Float?   @map("min_ctc")
+  maxCtc       Float?   @map("max_ctc")
+  estimatedCtc Float?   @map("estimated_ctc")
+  confidence   String? // "high", "medium", "low"
+  marketMedian Float?   @map("market_median")
+  marketRatio  Float?   @map("market_ratio")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([profileId])
+  @@map("ctc_estimates")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// RESUME STORAGE
+// ═══════════════════════════════════════════════════════════════════════
+
+model Resume {
+  id            String      @id @default(uuid())
+  profileId     String?     @map("profile_id")
+  profile       Profile?    @relation(fields: [profileId], references: [id])
+  fileName      String      @map("file_name")
+  fileType      String      @map("file_type") // "application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  fileSizeBytes Int?        @map("file_size_bytes")
+  parseStatus   ParseStatus @default(PENDING) @map("parse_status")
+  parsedData    Json?       @map("parsed_data")
+  uploadedAt    DateTime    @default(now()) @map("uploaded_at")
+
+  @@index([profileId])
+  @@index([parseStatus])
+  @@map("resumes")
+}
+
+enum ParseStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// INDUSTRY REFERENCE (for Industry Demand signal)
+// ═══════════════════════════════════════════════════════════════════════
+
+model Industry {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  demandScore Float    @default(5.0) @map("demand_score") // 0-10
+  growthRate  Float    @default(0.0) @map("growth_rate")  // annual % growth
+  trendLabel  String   @default("stable") @map("trend_label") // "booming", "growing", "stable", "declining"
+  updatedAt   DateTime @default(now()) @map("updated_at")
+
+  @@map("industries")
+}
